@@ -1,15 +1,14 @@
-/* Córtex Lab — service worker
-   - Arquivos do app (página, configuração): busca na rede primeiro (para
-     receber atualizações) e, sem internet ou com rede lenta, usa a cópia salva.
+/* Magabi Notes — service worker
+   - Página: busca a versão nova na rede, sem usar a cópia velha do navegador.
+     Se a rede demorar ou faltar, abre a cópia salva, mas continua baixando
+     em segundo plano: a versão nova fica salva e o app avisa para atualizar.
    - Ícones: cópia salva primeiro.
-   - Fontes e bibliotecas do Google (login): cópia salva e atualização em
-     segundo plano, para o app abrir também sem internet.
-   - Login e banco de dados (Firebase) nunca são guardados: sempre vão à rede. */
-const VERSAO = 'cortexlab-v3';
+   - Fontes do Google: cópia salva e atualização em segundo plano,
+     para o app abrir também sem internet. */
+const VERSAO = 'magabinotes-v3';
 const ARQUIVOS = [
   './',
   './index.html',
-  './firebase-config.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
@@ -27,7 +26,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(chaves => Promise.all(chaves.filter(c => c !== VERSAO).map(c => caches.delete(c))))
+      .then(chaves => Promise.all(chaves.filter(c => c.startsWith('magabinotes-') && c !== VERSAO).map(c => caches.delete(c))))
       .then(() => self.clients.claim())
   );
 });
@@ -51,6 +50,31 @@ function redePrimeiro(req, chaveCache, reserva) {
     .catch(() => caches.match(chaveCache).then(r => r || (reserva ? caches.match(reserva) : undefined)));
 }
 
+function pagina(event) {
+  let usouCopia = false;
+  const rede = fetch(event.request.url, { cache: 'no-cache', credentials: 'same-origin' });
+  const atualizar = rede.then(async resp => {
+    if (!resp || !resp.ok) return;
+    const cache = await caches.open(VERSAO);
+    const antigo = await cache.match('./index.html');
+    const antigoTxt = antigo ? await antigo.text() : null;
+    const novoTxt = await resp.clone().text();
+    await cache.put('./index.html', resp.clone());
+    if (usouCopia && antigoTxt !== null && antigoTxt !== novoTxt) {
+      const janelas = await self.clients.matchAll({ type: 'window' });
+      janelas.forEach(j => j.postMessage('nova-versao'));
+    }
+  }).catch(() => {});
+  event.waitUntil(atualizar);
+  return comTempoLimite(rede.then(r => { if (!r.ok) throw new Error('falha'); return r.clone(); }), 4000)
+    .catch(() => {
+      usouCopia = true;
+      return caches.match('./index.html')
+        .then(r => r || caches.match('./'))
+        .then(r => r || rede.then(x => x.clone()));
+    });
+}
+
 function salvoEAtualiza(req) {
   return caches.open(VERSAO).then(cache =>
     cache.match(req).then(salvo => {
@@ -70,13 +94,12 @@ self.addEventListener('fetch', event => {
 
   // Página do app
   if (req.mode === 'navigate') {
-    event.respondWith(redePrimeiro(req, './index.html', './'));
+    event.respondWith(pagina(event));
     return;
   }
 
-  // Fontes e bibliotecas do Firebase (arquivos estáticos)
-  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com' ||
-      (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/'))) {
+  // Fontes do Google
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     event.respondWith(salvoEAtualiza(req));
     return;
   }
@@ -89,5 +112,4 @@ self.addEventListener('fetch', event => {
       event.respondWith(redePrimeiro(req, req, null));
     }
   }
-  // Todo o resto (login do Google, Firestore) segue direto para a rede.
 });
