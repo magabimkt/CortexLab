@@ -1,14 +1,17 @@
-/* Magabi Notes — service worker
+/* Córtex Lab — service worker
    - Página: busca a versão nova na rede, sem usar a cópia velha do navegador.
      Se a rede demorar ou faltar, abre a cópia salva, mas continua baixando
      em segundo plano: a versão nova fica salva e o app avisa para atualizar.
+   - Configuração: busca na rede primeiro e, sem internet, usa a cópia salva.
    - Ícones: cópia salva primeiro.
-   - Fontes do Google: cópia salva e atualização em segundo plano,
-     para o app abrir também sem internet. */
-const VERSAO = 'magabinotes-v3';
+   - Fontes e bibliotecas do Google (login): cópia salva e atualização em
+     segundo plano, para o app abrir também sem internet.
+   - Login e banco de dados (Firebase) nunca são guardados: sempre vão à rede. */
+const VERSAO = 'cortexlab-v5';
 const ARQUIVOS = [
   './',
   './index.html',
+  './firebase-config.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
@@ -26,7 +29,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(chaves => Promise.all(chaves.filter(c => c.startsWith('magabinotes-') && c !== VERSAO).map(c => caches.delete(c))))
+      .then(chaves => Promise.all(chaves.filter(c => c.startsWith('cortexlab-') && c !== VERSAO).map(c => caches.delete(c))))
       .then(() => self.clients.claim())
   );
 });
@@ -98,8 +101,9 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Fontes do Google
-  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
+  // Fontes e bibliotecas do Firebase (arquivos estáticos)
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com' ||
+      (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/'))) {
     event.respondWith(salvoEAtualiza(req));
     return;
   }
@@ -112,4 +116,5 @@ self.addEventListener('fetch', event => {
       event.respondWith(redePrimeiro(req, req, null));
     }
   }
+  // Todo o resto (login do Google, Firestore) segue direto para a rede.
 });
