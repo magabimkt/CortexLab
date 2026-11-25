@@ -219,6 +219,26 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:env(safe-area
 .msg.erro{background:color-mix(in srgb,var(--bad) 14%,transparent);border:1px solid var(--bad)}
 .msg.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);border:1px solid var(--ok)}
 .pessoa{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
+.provas-home{padding:14px 14px 10px;border-radius:18px;background:var(--surface);border:1px solid var(--line);margin-bottom:14px}
+.provas-home h1{font-size:1.35rem;margin:0 0 2px}
+.prova-item{display:flex;gap:12px;align-items:center;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:10px 2px;color:inherit;font:inherit;cursor:pointer}
+.prova-item:first-of-type{border-top:0}
+.prova-item.atual{background:color-mix(in srgb,var(--accent) 7%,transparent);border-radius:12px;padding:10px 8px}
+.prova-dias{flex:none;width:64px;text-align:center;border-radius:12px;padding:6px 2px;line-height:1.05;border:2px solid var(--accent);color:var(--accent)}
+.prova-dias b{display:block;font-size:1.55rem}
+.prova-dias span{font-size:.72rem;font-weight:600}
+.prova-dias.alta{border-color:var(--bad);color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.prova-dias.media{border-color:var(--warn);color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.prova-item:first-of-type .prova-dias{width:72px}
+.prova-item:first-of-type .prova-dias b{font-size:1.9rem}
+.prova-txt{flex:1;min-width:0}
+.prova-txt .small{display:block}
+.hero.discreta{padding:12px 14px 10px}
+.hero.discreta .stats{margin-top:8px;gap:6px}
+.hero.discreta .stat{padding:6px 4px}
+.hero.discreta .stat b{font-size:1rem}
+.hero.discreta .stat span{font-size:.7rem}
+.hero.discreta details summary{cursor:pointer;font-size:.88rem;margin-top:8px;color:var(--muted)}
 .cal-card{border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface));border-radius:14px;padding:12px 14px;margin:0 0 14px}
 .cal-card .row{margin-top:8px}
 .cal-linha{display:flex;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
@@ -546,6 +566,29 @@ function cartaoProva(){
     <div class="small"><b>${esc(s.txt)}</b></div>
     <div class="row"><button class="btn sm primary" data-act="go" data-v="calendario">📅 Ver calendário completo</button></div></div>`;
 }
+function painelProximasProvas(){
+  const c=calDados(); if(!c) return '';
+  const agora=Date.now();
+  const futuras=c.provas.filter(p=>provaMs(p,p.fim)>=agora).sort((a,b)=>provaMs(a,a.ini)-provaMs(b,b.ini));
+  const vistas=new Set(); const prox=[];
+  futuras.forEach(p=>{ if(!vistas.has(p.disc)){ vistas.add(p.disc); prox.push(p); } });
+  if(!prox.length) return `<section class="provas-home"><h1>📅 Provas</h1><p class="small muted" style="margin:4px 0 8px">✅ Todas as provas deste semestre já foram realizadas.</p><button class="btn sm" data-act="go" data-v="calendario">Ver calendário completo</button></section>`;
+  const item=p=>{ const ini=provaMs(p,p.ini); const dias=Math.round((inicioDia(ini)-inicioDia(agora))/DIA_MS);
+    const urg=dias<=3?'alta':dias<=7?'media':'';
+    const num=dias<=0?'Hoje':dias===1?'1':String(dias); const rot=dias<=0?'':dias===1?'dia':'dias';
+    const d=new Date(ini); const atual=p.disc===disc.id;
+    return `<button class="prova-item${atual?' atual':''}" data-act="disc" data-v="${esc(p.disc)}" aria-label="${esc(nomeDisc(p.disc))}: ${esc(etapaDe(p).nome)} em ${dias<=0?'hoje':dias+' dias'}">
+      <span class="prova-dias ${urg}"><b>${num}</b><span>${rot}</span></span>
+      <span class="prova-txt"><b>${emojiDisc(p.disc)} ${esc(nomeDisc(p.disc))}</b>
+      <span class="small">${esc(etapaDe(p).nome)} · ${DIAS_SEM[d.getDay()]}, ${dataBR(ini).slice(0,5)} · ${esc(p.ini)} às ${esc(p.fim)}</span>
+      <span class="small muted">${esc(p.sala||'')}${atual?' · 📍 disciplina aberta':''}</span></span></button>`; };
+  return `<section class="provas-home" aria-labelledby="tituloProvas">
+    <h1 id="tituloProvas">📅 Próximas provas</h1>
+    <p class="small muted" style="margin:0 0 6px">A próxima prova de cada disciplina, da mais próxima para a mais distante. Toque para abrir a disciplina.</p>
+    ${prox.map(item).join('')}
+    <div class="row" style="margin-top:8px"><button class="btn sm" data-act="go" data-v="calendario">📅 Calendário completo (2ª chamada e prova final)</button></div>
+  </section>`;
+}
 function renderCalendario(){
   const c=calDados();
   if(!c){ app.innerHTML='<button class="back" data-act="go" data-v="home">← Início</button><h1>📅 Calendário de avaliações</h1><p class="muted">O calendário ainda não foi publicado.</p>'; return; }
@@ -618,10 +661,15 @@ function renderHome(){
   const edPend=disc.estudo.length-estudoRespondidas();
   app.innerHTML=`
   ${avisoVencimento()}
-  <section class="hero">
-    <h1>${esc(disc.nome)}</h1>
-    <p class="lead">${esc(disc.desc)} Toque num nó do mapa para abrir o módulo.</p>
-    ${heroSVG()}
+  ${painelProximasProvas()}
+  <section class="hero discreta" aria-label="Seu progresso nesta disciplina">
+    <div class="row" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px">
+      <b>📊 Seu progresso em ${disc.e} ${esc(disc.nome)}</b>
+      <span class="small muted">${totalConceitos()?Math.round(conceitosFeitos()/totalConceitos()*100):0}% dos conceitos</span></div>
+    <details><summary>🗺️ Ver mapa dos módulos</summary>
+      <p class="small muted" style="margin:6px 0 0">${esc(disc.desc)} Toque num nó do mapa para abrir o módulo.</p>
+      ${heroSVG()}
+    </details>
     ${sequenciaDias()?`<span class="streak">🔥 ${sequenciaDias()} ${sequenciaDias()>1?'dias seguidos':'dia'} de estudo</span>`:''}
     <div class="stats">
       <div class="stat"><b>${conceitosFeitos()}/${totalConceitos()}</b><span>conceitos compreendidos</span></div>
@@ -631,7 +679,6 @@ function renderHome(){
     </div>
   </section>
 
-  ${cartaoProva()}
   <h2>📅 Para hoje</h2>
   <div class="today">
     <div class="panel"><span class="big">${pend}</span><span class="small muted">cards para revisar</span>
