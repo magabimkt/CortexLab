@@ -176,6 +176,10 @@ table.tb{border-collapse:collapse;width:100%;min-width:460px;font-size:.86rem}
 .chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin:10px 0 14px;-webkit-overflow-scrolling:touch}
 .chip{appearance:none;border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:7px 13px;font-size:.85rem;white-space:nowrap;cursor:pointer}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.chips.quebra{flex-wrap:wrap;overflow-x:visible}
+.chips.quebra .chip{white-space:normal;text-align:left}
+.chip .qtd{opacity:.75;font-size:.78rem;margin-left:4px}
+.quiz-conf h2{font-size:1rem;margin:14px 0 4px}
 
 /* Flashcards */
 .fc{perspective:1200px;margin:6px 0 14px;cursor:pointer}
@@ -831,25 +835,49 @@ function avaliar(nota){
 /* =========================================================
    QUIZ
    ========================================================= */
-let QS={filtro:'all', qs:[], i:0, acertos:0, resp:null, modo:'normal', errosMod:{}};
+let QS={filtro:'all', sel:[], qs:[], i:0, acertos:0, resp:null, modo:'normal', errosMod:{}};
+const QTD_OPCOES=[10,15,20,30];
+function quizQtd(){ const v=STORE._quizQtd; return v==='todas'||QTD_OPCOES.includes(v)?v:10; }
+/* Assuntos escolhidos (só os que existem nesta disciplina). Vazio = todos */
+function quizSel(){ const ids=new Set(disc.modulos.map(m=>m.id)); return (QS.sel||[]).filter(id=>ids.has(id)); }
+function quizBase(){ const sel=quizSel(); return disc.quiz.filter(q=>!sel.length||sel.includes(q.m)); }
+/* Chave do melhor resultado: 'all', um módulo, ou a combinação escolhida */
+function quizChave(){ const sel=quizSel(); if(!sel.length||sel.length===disc.modulos.length) return 'all'; if(sel.length===1) return sel[0]; return 'mix:'+sel.slice().sort().join(','); }
 /* Prioridade: errou da última vez > ainda não vista > acertou poucas vezes > já dominada */
 function prioridadeQ(q){ const st=S().qstat[q.id]; if(!st) return 2; if(st.u===0) return 3; return st.e>st.c?2.5:1/(1+st.c); }
 function iniciarQuiz(modo){
   QS.modo=modo||'normal';
-  let base = QS.modo==='erros' ? questoesErradas() : disc.quiz.filter(q=>QS.filtro==='all'||q.m===QS.filtro);
+  let base = QS.modo==='erros' ? questoesErradas() : quizBase();
   base = base.map(q=>({q, p:prioridadeQ(q)+Math.random()*1.2})).sort((a,b)=>b.p-a.p).map(x=>x.q);
-  QS.qs=embaralhar(base.slice(0,10)).map(q=>{ const ordem=embaralhar(q.o.map((_,k)=>k)); return {q, ordem}; });
+  const qtd = QS.modo==='erros' ? 10 : (quizQtd()==='todas' ? base.length : quizQtd());
+  QS.filtro = quizChave();
+  QS.qs=embaralhar(base.slice(0,qtd)).map(q=>{ const ordem=embaralhar(q.o.map((_,k)=>k)); return {q, ordem}; });
   QS.i=0; QS.acertos=0; QS.resp=null; QS.errosMod={};
 }
 function renderQuiz(){
   const s=S();
   if(!QS.qs.length){
     const nErr=questoesErradas().length;
+    const sel=quizSel(), disp=quizBase().length, qtd=quizQtd(), chave=quizChave();
+    const vaiUsar = qtd==='todas' ? disp : Math.min(qtd,disp);
     app.innerHTML=`<h1>✅ Quiz</h1>
-      <p class="lead">Dez questões por rodada. O modo misturado intercala os módulos, o que exige mais esforço e gera aprendizagem mais duradoura.</p>
-      ${chipsModulos(QS.filtro,'qfiltro','🔀 Misturado')}
+      <p class="lead">Monte sua rodada: escolha os assuntos e a quantidade de questões. Misturar assuntos exige mais esforço e gera aprendizagem mais duradoura.</p>
+      <div class="quiz-conf">
+      <h2>📚 Assuntos <span class="small muted" style="font-weight:400">${sel.length?sel.length+' escolhido'+(sel.length>1?'s':''):'todos (misturado)'}</span></h2>
+      <div class="chips quebra" role="group" aria-label="Escolha os assuntos do quiz">
+        ${disc.modulos.map(m=>{ const n=disc.quiz.filter(q=>q.m===m.id).length; if(!n) return ''; const on=sel.includes(m.id);
+          return `<button class="chip" data-act="qsel" data-v="${m.id}" aria-pressed="${on}">${on?'✓ ':''}${m.e} ${esc(m.curto)}<span class="qtd">${n}</span></button>`; }).join('')}
+      </div>
+      <div class="row"><button class="btn sm" data-act="qselTodos">Selecionar todos</button>${sel.length?'<button class="btn sm ghost" data-act="qselLimpar">Limpar seleção</button>':''}</div>
+      <h2>🔢 Quantidade de questões</h2>
+      <div class="chips quebra" role="group" aria-label="Quantidade de questões">
+        ${QTD_OPCOES.map(n=>`<button class="chip" data-act="qqtd" data-v="${n}" aria-pressed="${qtd===n}">${n}</button>`).join('')}
+        <button class="chip" data-act="qqtd" data-v="todas" aria-pressed="${qtd==='todas'}">Todas (${disp})</button>
+      </div>
+      </div>
       <div class="panel stack">
-        <div class="small muted">Melhor resultado neste filtro: <b>${s.quiz[QS.filtro]!==undefined?Math.round(s.quiz[QS.filtro]*100)+'%':'ainda não feito'}</b></div>
+        <div class="small"><b>${vaiUsar}</b> questões nesta rodada · ${disp} disponíveis nos assuntos escolhidos${qtd!=='todas'&&disp<qtd?' <span class="small muted">(esses assuntos têm menos de '+qtd+' questões, então entram todas)</span>':''}</div>
+        <div class="small muted">Melhor resultado nesta combinação: <b>${s.quiz[chave]!==undefined?Math.round(s.quiz[chave]*100)+'%':'ainda não feito'}</b></div>
         <div class="row"><button class="btn primary" data-act="qstart">Começar quiz</button>
         ${nErr?`<button class="btn" data-act="qerros">🎯 Refazer meus erros (${nErr})</button>`:''}</div>
         <p class="small muted" style="margin:0">🧠 Quiz adaptativo: as questões que você errou e as que ainda não viu aparecem com mais frequência.</p>
@@ -866,7 +894,7 @@ function renderQuiz(){
         <div class="score">${QS.acertos}/${QS.qs.length}</div>
         <p>${msg}</p>
         ${Object.keys(QS.errosMod).length?`<div style="text-align:left"><b>Onde você errou nesta rodada:</b>${Object.entries(QS.errosMod).sort((a,b)=>b[1]-a[1]).map(([mid,n])=>{ const mo=modPorId(mid); return `<div class="row" style="flex-wrap:nowrap;align-items:center;margin-top:8px"><span style="flex:1">${mo.e} ${esc(mo.nome)} <span class="small muted">(${n} ${n>1?'erros':'erro'})</span></span><button class="btn sm" style="flex:none" data-act="mod" data-v="${mid}">📖 Rever</button></div>`; }).join('')}</div>`:''}
-        <div class="row" style="justify-content:center"><button class="btn primary" data-act="qstart">Nova rodada</button><button class="btn" data-act="qsair">Trocar filtro</button></div>
+        <div class="row" style="justify-content:center"><button class="btn primary" data-act="qstart">Nova rodada</button><button class="btn" data-act="qsair">Trocar assuntos</button></div>
       </div>`;
     return;
   }
@@ -1029,7 +1057,7 @@ const ACOES={
     if(d.id===disc.id){ go('trilha'); window.scrollTo(0,0); return; }
     disc=d; STORE._disc=d.id; save();
     CS={filtro:'all', fila:[], i:0, virado:false, treino:false, feitos:0};
-    QS={filtro:'all', qs:[], i:0, acertos:0, resp:null};
+    QS={filtro:'all', sel:[], qs:[], i:0, acertos:0, resp:null};
     go('trilha'); window.scrollTo(0,0); toast(d.e+' '+d.nome);
   },
   edop:v=>{ const [i,k]=v.split(':').map(Number); const s=S(); s.resp[i]=k; s.abertas[i]=true; save(); const y=window.scrollY; renderEstudo(); window.scrollTo(0,y); },
@@ -1048,7 +1076,11 @@ const ACOES={
   csair:()=>{ CS.fila=[]; renderCards(); },
   cvirar:()=>{ if(!CS.virado){ CS.virado=true; renderCards(); } },
   nota:v=>avaliar(Number(v)),
-  qfiltro:v=>{ QS.filtro=v; renderQuiz(); },
+  qfiltro:v=>{ QS.filtro=v; QS.sel=v==='all'?[]:[v]; renderQuiz(); },
+  qsel:v=>{ const s=quizSel(); QS.sel=s.includes(v)?s.filter(x=>x!==v):[...s,v]; renderQuiz(); },
+  qselTodos:()=>{ QS.sel=disc.modulos.filter(m=>disc.quiz.some(q=>q.m===m.id)).map(m=>m.id); renderQuiz(); },
+  qselLimpar:()=>{ QS.sel=[]; renderQuiz(); },
+  qqtd:v=>{ STORE._quizQtd = v==='todas' ? 'todas' : Number(v); save(); renderQuiz(); },
   qstart:()=>{ iniciarQuiz(); renderQuiz(); },
   qsair:()=>{ QS.qs=[]; renderQuiz(); },
   qop:v=>{
@@ -1059,7 +1091,7 @@ const ACOES={
     marcarDia(); save(); renderQuiz();
   },
   qerros:()=>{ iniciarQuiz('erros'); if(!QS.qs.length){ toast('🎉 Nenhuma questão errada para refazer'); return; } go('quiz'); },
-  rquiz:v=>{ QS.filtro=v; iniciarQuiz(); go('quiz'); },
+  rquiz:v=>{ QS.filtro=v; QS.sel=v==='all'?[]:[v]; iniciarQuiz(); go('quiz'); },
   rcards:v=>{ CS.filtro=v; const dif=cardsDificeis(v); const base=dif.length?dif:disc.flashcards.filter(f=>f.m===v); CS.fila=embaralhar(base).slice(0,20).map(c=>c.id); CS.i=0; CS.virado=false; CS.treino=true; CS.feitos=0; go('cards'); },
   instalar:()=>{ if(!PROMPT_INSTALAR) return; PROMPT_INSTALAR.prompt(); PROMPT_INSTALAR.userChoice.finally(()=>{ PROMPT_INSTALAR=null; if(VIEW==='home') renderHome(); }); },
   exportar:()=>{
