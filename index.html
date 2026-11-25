@@ -219,6 +219,15 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:env(safe-area
 .msg.erro{background:color-mix(in srgb,var(--bad) 14%,transparent);border:1px solid var(--bad)}
 .msg.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);border:1px solid var(--ok)}
 .pessoa{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
+.vence-ok{color:var(--ok);font-weight:600}.vence-alerta{color:var(--warn);font-weight:600}.vence-fim{color:var(--bad);font-weight:600}
+.pessoa.col{flex-direction:column;align-items:stretch}
+.pessoa .ctrl{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pessoa .ctrl input[type=date]{max-width:160px;padding:6px 8px;min-height:0}
+.resumo-ac{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.resumo-ac div{border:1px solid var(--line);border-radius:12px;padding:10px;text-align:center}
+.resumo-ac b{display:block;font-size:1.4rem}
+.aviso-vence{border:1px solid var(--warn);background:color-mix(in srgb,var(--warn) 12%,var(--surface));border-radius:14px;padding:12px 14px;margin:0 0 14px}
+.aviso-vence.fim{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--surface))}
 .pessoa:first-child{border-top:0;padding-top:0}
 .pessoa .quem{min-width:0;overflow-wrap:anywhere}
 .reforco .item{display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:start;padding:12px 0;border-top:1px solid var(--line)}
@@ -488,11 +497,33 @@ function heroSVG(){
     <text x="170" y="${cy+17}" text-anchor="middle" class="csub">domínio</text>
     ${nodes}</svg>`;
 }
+function avisoVencimento(){
+  if(ADMIN||!temVence(MEU_ACESSO)) return '';
+  const d=diasRestantes(MEU_ACESSO.vence); if(d>7) return '';
+  const quando=d<=0?'<b>hoje</b>':'em <b>'+d+' dia'+(d>1?'s':'')+'</b>';
+  return `<div class="aviso-vence ${d<=2?'fim':''}" role="status"><b>⏰ Seu acesso vence ${quando}</b> (${dataBR(MEU_ACESSO.vence)}).
+    <div class="small" style="margin:4px 0 8px">Renove para continuar estudando sem interrupção.</div>
+    <button class="btn sm primary" data-act="pgRenovar">🔁 Pedir renovação</button></div>`;
+}
+async function resumoAdminHome(){
+  const el=document.getElementById('acResumoHome'); if(!el||!window.FB) return;
+  try{
+    if(!RESUMO_ADMIN||Date.now()-RESUMO_ADMIN.t>300000){
+      const [per,ped]=await Promise.all([window.FB.listar('permitidos'),window.FB.listar('pedidos')]);
+      RESUMO_ADMIN={t:Date.now(),per,ped};
+    }
+    const sit=RESUMO_ADMIN.per.map(situacao);
+    const venc=sit.filter(s=>s.ordem===0).length, logo=sit.filter(s=>s.ordem===1).length, ped=RESUMO_ADMIN.ped.length;
+    const partes=[]; if(logo) partes.push('⚠️ '+logo+' vence'+(logo>1?'m':'')+' em até 7 dias'); if(venc) partes.push('🔒 '+venc+' vencido'+(venc>1?'s':'')); if(ped) partes.push('⏳ '+ped+' pedido'+(ped>1?'s':''));
+    const alvo=document.getElementById('acResumoHome'); if(alvo) alvo.innerHTML=partes.length?partes.join(' · '):'✅ Nenhum acesso vencendo nos próximos 7 dias.';
+  }catch(e){}
+}
 function renderHome(){
   const s=S();
   const pend=cardsPendentes('all').length;
   const edPend=disc.estudo.length-estudoRespondidas();
   app.innerHTML=`
+  ${avisoVencimento()}
   <section class="hero">
     <h1>${esc(disc.nome)}</h1>
     <p class="lead">${esc(disc.desc)} Toque num nó do mapa para abrir o módulo.</p>
@@ -544,8 +575,11 @@ function renderHome(){
   ${USUARIO?`<h2>👤 Sua conta</h2>
   <div class="panel stack">
     <p class="small muted" style="margin:0">Conta conectada: <b>${esc(USUARIO.email)}</b></p>
+    ${!ADMIN&&MEU_ACESSO?`<p class="small" style="margin:0">📅 Seu acesso: <span class="${situacao(MEU_ACESSO).cls}">${temVence(MEU_ACESSO)?esc(situacao(MEU_ACESSO).txt):'sem data de vencimento'}</span></p>`:''}
+    ${ADMIN?'<p class="small" style="margin:0" id="acResumoHome"></p>':''}
     <div class="row">${ADMIN?'<button class="btn sm primary" data-act="go" data-v="acessos">🔐 Gerenciar acessos</button>':''}<button class="btn sm ghost" data-act="pgSair">Sair da conta</button></div>
   </div>`:''}`;
+  if(ADMIN) resumoAdminHome();
 }
 
 /* =========================================================
@@ -989,6 +1023,27 @@ const CHAVE_LOCAL='cortexlab:chave:'+PAYLOAD.v;
 const ADMIN_EMAIL=String(window.CORTEX_ADMIN||'').trim().toLowerCase();
 let USUARIO=null, ADMIN=false, APP_ABERTO=false, PORTAO_ESTADO='';
 let LISTAS={pedidos:[],permitidos:[]};
+/* Vencimento do acesso: guardado em milissegundos no documento permitidos/{email} (campo "vence") */
+const DIA_MS=86400000, PRAZO_PADRAO=30, VENCE_LOCAL='cortexlab:vence';
+let MEU_ACESSO=null, RESUMO_ADMIN=null;
+function inicioDia(ms){ const d=new Date(ms); return new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime(); }
+function fimDoDia(ms){ const d=new Date(ms); return new Date(d.getFullYear(),d.getMonth(),d.getDate(),23,59,59,999).getTime(); }
+function fimEmDias(n,base){ const b=base||Date.now(); const d=new Date(b); return fimDoDia(new Date(d.getFullYear(),d.getMonth(),d.getDate()+n).getTime()); }
+function dataDeInput(v){ const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(v||''); return m?new Date(+m[1],+m[2]-1,+m[3],23,59,59,999).getTime():null; }
+function paraInput(ms){ const d=new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function dataBR(ms){ try{ return new Date(ms).toLocaleDateString('pt-BR'); }catch(e){ return ''; } }
+function diasRestantes(ms){ return Math.round((inicioDia(ms)-inicioDia(Date.now()))/DIA_MS); }
+function temVence(x){ return x && typeof x.vence==='number' && isFinite(x.vence); }
+function situacao(x){
+  if(!temVence(x)) return {ordem:3,cls:'',txt:'Sem vencimento'};
+  if(Date.now()>x.vence) return {ordem:0,cls:'vence-fim',txt:'🔒 Venceu em '+dataBR(x.vence)};
+  const d=diasRestantes(x.vence);
+  if(d===0) return {ordem:1,cls:'vence-alerta',txt:'⚠️ Vence hoje ('+dataBR(x.vence)+')'};
+  if(d<=7) return {ordem:1,cls:'vence-alerta',txt:'⚠️ Vence em '+dataBR(x.vence)+' (falta'+(d>1?'m ':' ')+d+' dia'+(d>1?'s':'')+')'};
+  return {ordem:2,cls:'vence-ok',txt:'✅ Até '+dataBR(x.vence)+' (faltam '+d+' dias)'};
+}
+function guardarVenceLocal(ms){ try{ if(typeof ms==='number') localStorage.setItem(VENCE_LOCAL,String(ms)); else localStorage.removeItem(VENCE_LOCAL); }catch(e){} }
+function venceLocalPassou(){ const v=Number(lerLocal(VENCE_LOCAL)); return !!v && Date.now()>v; }
 
 function b64bytes(s){ const bin=atob(String(s).trim()); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }
 async function decifrar(chave){
@@ -1058,6 +1113,14 @@ function portao(estado,extra){
       <p class="muted">Seu pedido de acesso com <b>${esc(USUARIO?USUARIO.email:'')}</b> foi enviado para a administradora. Assim que ele for aprovado, toque em "Verificar novamente".</p>
       <div class="stack"><button class="btn primary full" data-act="pgVerificar">Verificar novamente</button>
       <button class="btn ghost full" data-act="pgSair">Usar outra conta</button></div>${msg}</div>`;
+  } else if(estado==='vencido'){
+    h=`<div class="panel">
+      <h1 id="portaoTitulo">⏰ Seu acesso venceu</h1>
+      <p class="muted">O acesso de <b>${esc(USUARIO?USUARIO.email:'')}</b> ao Córtex Lab foi até <b>${esc(extra.vence?dataBR(extra.vence):'')}</b>. Para continuar estudando, peça a renovação.</p>
+      <p class="small muted">Seu progresso de estudo continua salvo neste aparelho.</p>
+      <div class="stack"><button class="btn primary full" data-act="pgRenovar">🔁 Pedir renovação</button>
+      <button class="btn full" data-act="pgVerificar">Já renovei, verificar novamente</button>
+      <button class="btn ghost full" data-act="pgSair">Usar outra conta</button></div>${msg}</div>`;
   } else if(estado==='semchave'){
     h=`<div class="panel">
       <h1 id="portaoTitulo">🔑 Configurar o conteúdo</h1>
@@ -1096,6 +1159,7 @@ async function conferirAcesso(){
   if(!APP_ABERTO) portao('carregando');
   const r=await window.FB.lerChave(PAYLOAD.v);
   if(r.chave){
+    if(!ADMIN){ try{ MEU_ACESSO=await window.FB.meuAcesso(); guardarVenceLocal(temVence(MEU_ACESSO)?MEU_ACESSO.vence:null); }catch(e){} }
     const ok=await abrirCom(r.chave);
     if(ok){ if(VIEW==='home') renderHome(); return; }
     if(ADMIN){ if(!APP_ABERTO) portao('semchave',{msg:'A chave salva no Firebase não abre esta versão. Cole a chave correta.'}); }
@@ -1109,6 +1173,8 @@ async function conferirAcesso(){
   }
   if(r.erro==='permission-denied'){
     if(APP_ABERTO){ esquecerChave(); location.reload(); return; }
+    let meu=null; try{ meu=await window.FB.meuAcesso(); }catch(e){}
+    if(temVence(meu) && Date.now()>meu.vence){ guardarVenceLocal(meu.vence); esquecerChave(); portao('vencido',{vence:meu.vence}); return; }
     try{ await window.FB.pedirAcesso(USUARIO.nome||''); }catch(e){}
     portao('pendente'); return;
   }
@@ -1127,9 +1193,14 @@ function renderAcessos(){
     <div class="panel stack">
       <input class="campo" id="acEmail" type="email" placeholder="email@exemplo.com" aria-label="Email a liberar">
       <input class="campo" id="acNome" placeholder="Nome (opcional)" aria-label="Nome">
+      <label class="small" for="acVence">Acesso válido até:</label>
+      <input class="campo" id="acVence" type="date" value="${paraInput(fimEmDias(PRAZO_PADRAO))}" aria-label="Data de vencimento">
+      <label class="check small" style="margin:0"><input type="checkbox" id="acSemVence"><span>Sem vencimento</span></label>
       <button class="btn primary" data-act="acLiberar">Liberar acesso</button>
       <p class="small muted" style="margin:0">A pessoa entra com esse email pelo Google, ou cria uma conta com email e senha.</p>
     </div>
+    <h2>📊 Situação dos acessos</h2>
+    <div class="panel" id="acResumo"><span class="muted small">Carregando…</span></div>
     <h2>⏳ Pedidos aguardando</h2>
     <div class="panel" id="acPedidos"><span class="muted small">Carregando…</span></div>
     <h2>✅ Pessoas com acesso</h2>
@@ -1149,18 +1220,37 @@ async function carregarListas(){
   }catch(e){ const a=$('#acPedidos'); if(a) a.innerHTML='<span class="small">Não foi possível carregar. Verifique a internet e as regras do Firestore.</span>'; return; }
   if(VIEW!=='acessos') return;
   const pp=LISTAS.pedidos.sort((a,b)=>String(b.quando||'').localeCompare(String(a.quando||'')));
-  $('#acPedidos').innerHTML = pp.length ? pp.map(x=>`<div class="pessoa"><div class="quem"><b>${esc(x.nome||'Sem nome')}</b><div class="small muted">${esc(x.id)}${x.quando?' · '+dataCurta(x.quando):''}</div></div>
+  $('#acPedidos').innerHTML = pp.length ? pp.map(x=>`<div class="pessoa"><div class="quem"><b>${esc(x.nome||'Sem nome')}</b>${x.tipo==='renovacao'?' <span class="pill">🔁 Renovação</span>':''}<div class="small muted">${esc(x.id)}${x.quando?' · '+dataCurta(x.quando):''}</div></div>
     <div class="row" style="flex:none"><button class="btn sm primary" data-act="acAprovar" data-v="${esc(x.id)}">Aprovar</button><button class="btn sm ghost" data-act="acRecusar" data-v="${esc(x.id)}">Recusar</button></div></div>`).join('')
     : '<span class="small muted">Nenhum pedido no momento.</span>';
-  const pm=LISTAS.permitidos.sort((a,b)=>a.id.localeCompare(b.id));
-  $('#acPermitidos').innerHTML = pm.length ? pm.map(x=>`<div class="pessoa"><div class="quem"><b>${esc(x.nome||'Sem nome')}</b><div class="small muted">${esc(x.id)}</div></div>
-    <button class="btn sm ghost" style="flex:none" data-act="acRemover" data-v="${esc(x.id)}">Remover</button></div>`).join('')
+  const pm=LISTAS.permitidos.sort((a,b)=>{ const sa=situacao(a), sb=situacao(b); if(sa.ordem!==sb.ordem) return sa.ordem-sb.ordem; if(temVence(a)&&temVence(b)) return a.vence-b.vence; return a.id.localeCompare(b.id); });
+  RESUMO_ADMIN={t:Date.now(),per:LISTAS.permitidos,ped:LISTAS.pedidos};
+  const sit=pm.map(situacao), n=o=>sit.filter(s=>s.ordem===o).length;
+  $('#acResumo').innerHTML=`<div class="resumo-ac"><div><b class="vence-fim">${n(0)}</b><span class="small">vencidos (bloqueados)</span></div><div><b class="vence-alerta">${n(1)}</b><span class="small">vencem em até 7 dias</span></div><div><b class="vence-ok">${n(2)}</b><span class="small">ativos</span></div><div><b>${n(3)}</b><span class="small">sem vencimento</span></div></div>
+    ${n(3)?`<button class="btn sm" style="margin-top:10px" data-act="acDar30">Dar ${PRAZO_PADRAO} dias a quem está sem vencimento</button>`:''}`;
+  $('#acPermitidos').innerHTML = pm.length ? pm.map(x=>{ const s=situacao(x); const id=esc(x.id); return `<div class="pessoa col"><div class="quem"><b>${esc(x.nome||'Sem nome')}</b><div class="small muted">${id}</div><div class="small ${s.cls}">${esc(s.txt)}</div></div>
+    <div class="ctrl"><input class="campo" type="date" id="dv_${id}" value="${temVence(x)?paraInput(x.vence):''}" aria-label="Nova data de vencimento de ${id}">
+    <button class="btn sm" data-act="acData" data-v="${id}">Salvar data</button>
+    <button class="btn sm primary" data-act="acMais30" data-v="${id}">+${PRAZO_PADRAO} dias</button>
+    ${temVence(x)?`<button class="btn sm ghost" data-act="acSemPrazo" data-v="${id}">Sem vencimento</button>`:''}
+    <button class="btn sm ghost" data-act="acRemover" data-v="${id}">Remover</button></div></div>`; }).join('')
     : '<span class="small muted">Ninguém liberado ainda (além de você, que é a administradora).</span>';
 }
-async function liberarEmail(email,nome){
-  await window.FB.salvar('permitidos',email,{nome:nome||'',quando:new Date().toISOString()});
+async function liberarEmail(email,nome,vence){
+  const dados={nome:nome||'',quando:new Date().toISOString()};
+  if(typeof vence==='number') dados.vence=vence;
+  await window.FB.salvar('permitidos',email,dados);
   try{ await window.FB.apagar('pedidos',email); }catch(e){}
 }
+/* Altera só o vencimento, mantendo nome e data de liberação */
+async function definirVence(email,vence){
+  const atual=LISTAS.permitidos.find(x=>x.id===email)||{};
+  const dados={nome:atual.nome||'',quando:atual.quando||new Date().toISOString()};
+  if(typeof vence==='number') dados.vence=vence;
+  await window.FB.salvar('permitidos',email,dados);
+}
+/* +30 dias: a partir do vencimento atual, se ainda vale; senão, a partir de hoje */
+function renovarAPartir(x){ const base=temVence(x)&&x.vence>Date.now()?x.vence:Date.now(); return fimEmDias(PRAZO_PADRAO,base); }
 const EMAIL_OK=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 Object.assign(ACOES,{
   pgGoogle:async(v,el)=>{ travar(el,true); try{ await window.FB.entrarGoogle(); }catch(e){ msgPortao(textoErro(e)); } travar(el,false); },
@@ -1169,7 +1259,7 @@ Object.assign(ACOES,{
   pgEsqueci:async()=>{ const em=($('#pgEmail').value||'').trim(); if(!EMAIL_OK.test(em)){ msgPortao('Digite seu email no campo acima e toque de novo em "Esqueci minha senha".'); return; } try{ await window.FB.redefinir(em); msgPortao('Se houver uma conta com esse email, você vai receber um link para criar uma nova senha.',true); }catch(e){ msgPortao(textoErro(e)); } },
   pgConfirmei:async(v,el)=>{ travar(el,true); try{ const u=await window.FB.recarregar(); if(u&&u.verificado){ await window.CORTEX_AUTH(u); } else msgPortao('Ainda não identificamos a confirmação. Abra o link do email e tente de novo.'); }catch(e){ msgPortao(textoErro(e)); } travar(el,false); },
   pgReenviar:async()=>{ try{ await window.FB.reenviar(); msgPortao('Email reenviado. Confira também a caixa de spam.',true); }catch(e){ msgPortao(textoErro(e)); } },
-  pgVerificar:async(v,el)=>{ travar(el,true); await conferirAcesso(); if(PORTAO_ESTADO==='pendente') msgPortao('Seu acesso ainda não foi liberado.'); },
+  pgVerificar:async(v,el)=>{ travar(el,true); await conferirAcesso(); if(PORTAO_ESTADO==='pendente') msgPortao('Seu acesso ainda não foi liberado.'); else if(PORTAO_ESTADO==='vencido') msgPortao('Seu acesso ainda não foi renovado.'); },
   pgSair:async()=>{ if(!confirm('Sair da conta neste aparelho? Seu progresso de estudo continua salvo aqui.')) return; esquecerChave(); try{ await window.FB.sair(); }catch(e){} location.reload(); },
   pgRecarregar:()=>location.reload(),
   pgChave:async(v,el)=>{ const k=($('#pgChave').value||'').trim(); if(!k){ msgPortao('Cole a chave.'); return; } travar(el,true);
@@ -1177,8 +1267,26 @@ Object.assign(ACOES,{
     if(!dados){ msgPortao('Esta chave não abre esta versão do conteúdo. Confira se copiou a chave inteira, do arquivo da versão '+esc(PAYLOAD.v)+'.'); travar(el,false); return; }
     try{ await window.FB.salvar('chaves',PAYLOAD.v,{k}); }catch(e){ msgPortao('Não foi possível salvar no Firebase. Confira as regras do Firestore.'); travar(el,false); return; }
     await abrirCom(k); },
-  acLiberar:async(v,el)=>{ const em=($('#acEmail').value||'').trim().toLowerCase(), nome=($('#acNome').value||'').trim(); if(!EMAIL_OK.test(em)){ toast('Digite um email válido'); return; } travar(el,true); try{ await liberarEmail(em,nome); toast('✅ Acesso liberado para '+em); $('#acEmail').value=''; $('#acNome').value=''; carregarListas(); }catch(e){ toast('Não foi possível liberar. Verifique a internet.'); } travar(el,false); },
-  acAprovar:async(v,el)=>{ const p=LISTAS.pedidos.find(x=>x.id===v)||{}; travar(el,true); try{ await liberarEmail(v,p.nome||''); toast('✅ Acesso liberado para '+v); carregarListas(); }catch(e){ toast('Não foi possível aprovar.'); travar(el,false); } },
+  acLiberar:async(v,el)=>{ const em=($('#acEmail').value||'').trim().toLowerCase(), nome=($('#acNome').value||'').trim(); if(!EMAIL_OK.test(em)){ toast('Digite um email válido'); return; }
+    const sem=$('#acSemVence').checked; const vence=sem?null:dataDeInput($('#acVence').value);
+    if(!sem && !vence){ toast('Escolha a data de vencimento ou marque "Sem vencimento"'); return; }
+    if(!sem && vence<Date.now()){ toast('A data de vencimento já passou'); return; }
+    travar(el,true); try{ await liberarEmail(em,nome,vence); toast('✅ Acesso liberado para '+em+(vence?' até '+dataBR(vence):'')); $('#acEmail').value=''; $('#acNome').value=''; carregarListas(); }catch(e){ toast('Não foi possível liberar. Verifique a internet.'); } travar(el,false); },
+  acAprovar:async(v,el)=>{ const p=LISTAS.pedidos.find(x=>x.id===v)||{}; const atual=LISTAS.permitidos.find(x=>x.id===v); const vence=renovarAPartir(atual);
+    travar(el,true); try{ await liberarEmail(v,p.nome||(atual&&atual.nome)||'',vence); toast('✅ '+v+' liberado até '+dataBR(vence)); carregarListas(); }catch(e){ toast('Não foi possível aprovar.'); travar(el,false); } },
+  acData:async(v,el)=>{ const inp=document.getElementById('dv_'+v); const vence=dataDeInput(inp&&inp.value); if(!vence){ toast('Escolha uma data'); return; }
+    if(vence<Date.now() && !confirm('Essa data já passou: o acesso de '+v+' ficará bloqueado. Continuar?')) return;
+    travar(el,true); try{ await definirVence(v,vence); toast('📅 '+v+': acesso até '+dataBR(vence)); carregarListas(); }catch(e){ toast('Não foi possível salvar a data.'); travar(el,false); } },
+  acMais30:async(v,el)=>{ const atual=LISTAS.permitidos.find(x=>x.id===v); const vence=renovarAPartir(atual);
+    travar(el,true); try{ await definirVence(v,vence); toast('🔁 '+v+': acesso até '+dataBR(vence)); carregarListas(); }catch(e){ toast('Não foi possível renovar.'); travar(el,false); } },
+  acSemPrazo:async(v,el)=>{ if(!confirm('Deixar o acesso de '+v+' sem data de vencimento?')) return;
+    travar(el,true); try{ await definirVence(v,null); toast('Acesso de '+v+' sem vencimento'); carregarListas(); }catch(e){ toast('Não foi possível salvar.'); travar(el,false); } },
+  acDar30:async(v,el)=>{ const alvo=LISTAS.permitidos.filter(x=>!temVence(x)); if(!alvo.length) return;
+    const vence=fimEmDias(PRAZO_PADRAO);
+    if(!confirm('Definir vencimento em '+dataBR(vence)+' para '+alvo.length+' pessoa'+(alvo.length>1?'s':'')+' que estão sem vencimento?')) return;
+    travar(el,true); let ok=0; for(const x of alvo){ try{ await definirVence(x.id,vence); ok++; }catch(e){} }
+    toast('📅 Vencimento definido para '+ok+' pessoa'+(ok>1?'s':'')); carregarListas(); },
+  pgRenovar:async(v,el)=>{ travar(el,true); try{ await window.FB.pedirAcesso(USUARIO&&USUARIO.nome||'','renovacao'); const t='✅ Pedido de renovação enviado. Assim que for aprovado, seu acesso é renovado.'; if(PORTAO_ESTADO) msgPortao(t,true); else toast('✅ Pedido de renovação enviado'); }catch(e){ const t='Não foi possível enviar o pedido. Verifique a internet.'; if(PORTAO_ESTADO) msgPortao(t); else toast(t); } travar(el,false); },
   acRecusar:async(v,el)=>{ if(!confirm('Recusar o pedido de '+v+'?')) return; travar(el,true); try{ await window.FB.apagar('pedidos',v); carregarListas(); }catch(e){ toast('Não foi possível recusar.'); travar(el,false); } },
   acRemover:async(v,el)=>{ if(!confirm('Remover o acesso de '+v+'? A pessoa perde o acesso na próxima vez que abrir o app com internet.')) return; travar(el,true); try{ await window.FB.apagar('permitidos',v); toast('Acesso removido'); carregarListas(); }catch(e){ toast('Não foi possível remover.'); travar(el,false); } },
   acChave:async(v,el)=>{ const k=($('#acChave').value||'').trim(); if(!k){ toast('Cole a chave'); return; }
@@ -1191,7 +1299,7 @@ Object.assign(ACOES,{
 if(STORE._tema) document.documentElement.setAttribute('data-theme',STORE._tema);
 (async()=>{
   const salva=lerLocal(CHAVE_LOCAL);
-  if(!(salva && await abrirCom(salva))) portao('carregando');
+  if(!(salva && !venceLocalPassou() && await abrirCom(salva))) portao('carregando');
   setTimeout(()=>{ if(!window.FB && !APP_ABERTO && PORTAO_ESTADO==='carregando') window.CORTEX_ERRO('rede'); },15000);
 })();
 
@@ -1242,7 +1350,8 @@ try{
         try{ const s=await F.getDoc(F.doc(db,'chaves',v)); return s.exists()?{chave:s.data().k}:{inexistente:true}; }
         catch(e){ return {erro:e.code||'erro'}; }
       },
-      pedirAcesso:(nome)=>F.setDoc(F.doc(db,'pedidos',meuEmail()),{nome:nome||'',email:meuEmail(),quando:new Date().toISOString()}),
+      pedirAcesso:(nome,tipo)=>F.setDoc(F.doc(db,'pedidos',meuEmail()),Object.assign({nome:nome||'',email:meuEmail(),quando:new Date().toISOString()},tipo?{tipo}:{})),
+      async meuAcesso(){ const s=await F.getDoc(F.doc(db,'permitidos',meuEmail())); return s.exists()?s.data():null; },
       async listar(col){ const q=await F.getDocs(F.collection(db,col)); return q.docs.map(d=>({id:d.id,...d.data()})); },
       salvar:(col,id,dados)=>F.setDoc(F.doc(db,col,id),dados),
       apagar:(col,id)=>F.deleteDoc(F.doc(db,col,id))
